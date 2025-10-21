@@ -29,8 +29,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/admin/drivers")
@@ -40,7 +40,7 @@ public class DriverAdminController {
     private final UserRepository userRepository;
     private final DriverLicenseRepository driverLicenseRepository;
 
-    // ✅ 메일 발송을 위한 의존성/설정
+    // 메일 발송
     private final JavaMailSender mailSender;
 
     @Value("${spring.mail.username}")
@@ -52,51 +52,97 @@ public class DriverAdminController {
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     private static final DateTimeFormatter TS_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
-    // ─────────────────────────────────────────────────────────────────────────────
-    // 대기중 드라이버 목록 (페이징 + 검색(userid/username) + sort=createdAt,asc|desc)
-    // 예: GET /admin/drivers/pending?page=0&size=20&sort=createdAt,asc&search=kim
-    // ─────────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
+     * 공통: 페이지 기본 정렬(createdAt ASC) 보정
+     * ------------------------------------------------------------------------ */
+    private Pageable defaultPageable(Pageable pageable) {
+        if (pageable == null) {
+            return PageRequest.of(0, 20, Sort.by(Sort.Order.asc("createdAt")));
+        }
+        if (pageable.getSort().isUnsorted()) {
+            return PageRequest.of(
+                    Math.max(0, pageable.getPageNumber()),
+                    Math.max(1, pageable.getPageSize()),
+                    Sort.by(Sort.Order.asc("createdAt"))
+            );
+        }
+        return pageable;
+    }
+
+    /* ------------------------------------------------------------------------
+     * 승인 대기 목록
+     * GET /admin/drivers/pending?page=0&size=10&sort=createdAt,asc&search=kim
+     * ------------------------------------------------------------------------ */
     @GetMapping("/pending")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Page<UserResponse>> listPending(
             @RequestParam(value = "search", required = false) String search,
             Pageable pageable) {
-        // 기본 정렬 보정(미지정 시 createdAt ASC)
-        Pageable pg = pageable;
-        if (pg.getSort().isUnsorted()) {
-            pg = PageRequest.of(
-                    Math.max(0, pageable.getPageNumber()),
-                    Math.max(1, pageable.getPageSize()),
-                    Sort.by(Sort.Order.asc("createdAt")));
-        }
 
-        Page<UserEntity> rawPage = userRepository.findByRoleAndApprovalStatus(
-                Role.ROLE_DRIVER, ApprovalStatus.PENDING, pg);
+        Pageable pg = defaultPageable(pageable);
+        String q = StringUtils.hasText(search) ? search.trim() : null;
 
-        // 검색: userid/username 포함
-        Page<UserEntity> pageToMap;
-        if (StringUtils.hasText(search)) {
-            String q = search.trim().toLowerCase();
-            List<UserEntity> filtered = rawPage.getContent().stream()
-                    .filter(u -> containsIgnoreCase(u.getUserid(), q)
-                            || containsIgnoreCase(u.getUsername(), q))
-                    .collect(Collectors.toList());
-            pageToMap = new PageImpl<>(filtered, pg, filtered.size());
-        } else {
-            pageToMap = rawPage;
-        }
-
-        Page<UserResponse> mapped = pageToMap.map(this::toResponse);
-        return ResponseEntity.ok(mapped);
+        Page<UserEntity> pageData = userRepository.searchByRoleAndStatus(
+                Role.ROLE_DRIVER, ApprovalStatus.PENDING, q, pg
+        );
+        return ResponseEntity.ok(pageData.map(this::toResponse));
     }
 
-    private static boolean containsIgnoreCase(String s, String qLower) {
-        return s != null && s.toLowerCase().contains(qLower);
+    /* ------------------------------------------------------------------------
+     * 승인됨 목록
+     * ------------------------------------------------------------------------ */
+    @GetMapping("/approved")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Page<UserResponse>> listApproved(
+            @RequestParam(value = "search", required = false) String search,
+            Pageable pageable) {
+
+        Pageable pg = defaultPageable(pageable);
+        String q = StringUtils.hasText(search) ? search.trim() : null;
+
+        Page<UserEntity> pageData = userRepository.searchByRoleAndStatus(
+                Role.ROLE_DRIVER, ApprovalStatus.APPROVED, q, pg
+        );
+        return ResponseEntity.ok(pageData.map(this::toResponse));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
-    // 프로필 이미지 조회
-    // ─────────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
+     * 승인 거절 목록
+     * ------------------------------------------------------------------------ */
+    @GetMapping("/rejected")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Page<UserResponse>> listRejected(
+            @RequestParam(value = "search", required = false) String search,
+            Pageable pageable) {
+
+        Pageable pg = defaultPageable(pageable);
+        String q = StringUtils.hasText(search) ? search.trim() : null;
+
+        Page<UserEntity> pageData = userRepository.searchByRoleAndStatus(
+                Role.ROLE_DRIVER, ApprovalStatus.REJECTED, q, pg
+        );
+        return ResponseEntity.ok(pageData.map(this::toResponse));
+    }
+
+    /* ------------------------------------------------------------------------
+     * 탭 카운트
+     * ------------------------------------------------------------------------ */
+    @GetMapping("/counts")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Map<String, Object>> counts() {
+        long approved = userRepository.countByRoleAndApprovalStatus(Role.ROLE_DRIVER, ApprovalStatus.APPROVED);
+        long rejected = userRepository.countByRoleAndApprovalStatus(Role.ROLE_DRIVER, ApprovalStatus.REJECTED);
+        long pending  = userRepository.countByRoleAndApprovalStatus(Role.ROLE_DRIVER, ApprovalStatus.PENDING);
+        return ResponseEntity.ok(Map.of(
+                "approved", approved,
+                "rejected", rejected,
+                "pending",  pending
+        ));
+    }
+
+    /* ------------------------------------------------------------------------
+     * 프로필 이미지 (원래 경로) : /admin/drivers/{userid}/profile
+     * ------------------------------------------------------------------------ */
     @GetMapping("/{userid}/profile")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<byte[]> getProfile(@PathVariable String userid) {
@@ -117,15 +163,14 @@ public class DriverAdminController {
         return new ResponseEntity<>(bytes, headers, HttpStatus.OK);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
-    // 라이선스 이미지 조회 (inline 미리보기)
-    // ─────────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
+     * 라이선스 이미지 조회 (inline)
+     * ------------------------------------------------------------------------ */
     @GetMapping("/{userid}/license")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<byte[]> getLicense(@PathVariable String userid) {
         var u = userRepository.findByUserid(userid).orElse(null);
-        if (u == null)
-            return notFound();
+        if (u == null) return notFound();
 
         var dl = driverLicenseRepository.findByUser_UserNum(u.getUserNum()).orElse(null);
         if (dl == null || dl.getLicenseImage() == null || dl.getLicenseImage().length == 0) {
@@ -146,19 +191,17 @@ public class DriverAdminController {
         return new ResponseEntity<>(bytes, headers, HttpStatus.OK);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
-    // 라이선스 정보 조회 (프론트 모달 정보용)
-    // ─────────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
+     * 라이선스 정보 조회 (모달용)
+     * ------------------------------------------------------------------------ */
     @GetMapping("/{userid}/license/info")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<?> getLicenseInfo(@PathVariable String userid) {
         var u = userRepository.findByUserid(userid).orElse(null);
-        if (u == null)
-            return notFound();
+        if (u == null) return notFound();
 
         var dlOpt = driverLicenseRepository.findByUser_UserNum(u.getUserNum());
-        if (dlOpt.isEmpty())
-            return notFound();
+        if (dlOpt.isEmpty()) return notFound();
 
         var dl = dlOpt.get();
         Map<String, Object> body = new LinkedHashMap<>();
@@ -170,85 +213,97 @@ public class DriverAdminController {
         return ResponseEntity.ok(body);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
-    // 승인 (PENDING → APPROVED) — 면허 이미지가 실제로 있어야 승인 + 승인 메일
-    // ─────────────────────────────────────────────────────────────────────────────
-    @PostMapping("/{userid}/approve")
+    /* ------------------------------------------------------------------------
+     * 상태 일괄 변경 API
+     *  - 어떤 현재 상태든 목표 상태로 변경
+     *  - APPROVED 로 변경 시 운전면허 이미지 필수
+     *  - APPROVED/REJECTED 변경 시 각각 승인/거절 메일 발송
+     *  - PENDING 으로 변경 시 메일 미발송
+     * ------------------------------------------------------------------------ */
+    @Data
+    public static class StatusChangeRequest {
+        private ApprovalStatus status;
+        private String reason; // REJECTED 시 옵션
+    }
+
+    @PostMapping("/{userid}/status")
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
-    public ResponseEntity<?> approve(@PathVariable String userid) {
+    public ResponseEntity<?> changeStatus(@PathVariable String userid,
+                                          @RequestBody StatusChangeRequest req) {
+        if (req == null || req.getStatus() == null) {
+            return badRequest("STATUS_REQUIRED");
+        }
+        var target = req.getStatus();
+
         var u = userRepository.findByUserid(userid).orElse(null);
-        if (u == null)
-            return notFound();
+        if (u == null) return notFound();
 
         if (u.getRole() != Role.ROLE_DRIVER) {
             return badRequest("NOT_A_DRIVER");
         }
-        if (u.getApprovalStatus() != ApprovalStatus.PENDING) {
-            return conflict("INVALID_STATUS", Map.of("current", u.getApprovalStatus().name()));
+
+        // 이미 동일 상태면 OK 반환(멱등)
+        if (u.getApprovalStatus() == target) {
+            return ok(Map.of("ok", true, "status", target.name()));
         }
 
-        var dlOpt = driverLicenseRepository.findByUser_UserNum(u.getUserNum());
-        if (dlOpt.isEmpty() || dlOpt.get().getLicenseImage() == null || dlOpt.get().getLicenseImage().length == 0) {
-            return conflict("LICENSE_REQUIRED", Map.of(
-                    "message", "승인을 위해 운전면허 이미지가 등록되어 있어야 합니다."));
+        // APPROVED 로 변경 시 면허 이미지 필수
+        if (target == ApprovalStatus.APPROVED) {
+            var dlOpt = driverLicenseRepository.findByUser_UserNum(u.getUserNum());
+            if (dlOpt.isEmpty() || dlOpt.get().getLicenseImage() == null || dlOpt.get().getLicenseImage().length == 0) {
+                return conflict("LICENSE_REQUIRED", Map.of(
+                        "message", "승인을 위해 운전면허 이미지가 등록되어 있어야 합니다."));
+            }
         }
 
-        u.setApprovalStatus(ApprovalStatus.APPROVED);
+        // 상태 변경
+        u.setApprovalStatus(target);
         userRepository.save(u);
 
-        sendApprovalMailAfterCommit(u);
+        // 메일 발송
+        if (target == ApprovalStatus.APPROVED) {
+            sendApprovalMailAfterCommit(u);
+        } else if (target == ApprovalStatus.REJECTED) {
+            String reason = StringUtils.hasText(req.getReason()) ? req.getReason().trim() : null;
+            sendRejectionMailAfterCommit(u, reason);
+        }
 
-        return ok(Map.of("ok", true, "status", "APPROVED"));
+        return ok(Map.of("ok", true, "status", target.name()));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
-    // 거절 (PENDING → REJECTED) + optional 사유 + 거절 메일
-    // ─────────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
+     * 기존 approve/reject (호환) — 내부적으로 changeStatus 사용
+     * ------------------------------------------------------------------------ */
+    @PostMapping("/{userid}/approve")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Transactional
+    public ResponseEntity<?> approveCompat(@PathVariable String userid) {
+        StatusChangeRequest r = new StatusChangeRequest();
+        r.setStatus(ApprovalStatus.APPROVED);
+        return changeStatus(userid, r);
+    }
+
     @Data
-    public static class RejectRequest {
-        private String reason; // optional
-    }
+    public static class RejectRequest { private String reason; }
 
     @PostMapping("/{userid}/reject")
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
-    public ResponseEntity<?> reject(@PathVariable String userid,
-            @RequestBody(required = false) RejectRequest body) {
-        var u = userRepository.findByUserid(userid).orElse(null);
-        if (u == null)
-            return notFound();
-
-        if (u.getRole() != Role.ROLE_DRIVER) {
-            return badRequest("NOT_A_DRIVER");
-        }
-        if (u.getApprovalStatus() != ApprovalStatus.PENDING) {
-            return conflict("INVALID_STATUS", Map.of("current", u.getApprovalStatus().name()));
-        }
-
-        u.setApprovalStatus(ApprovalStatus.REJECTED);
-        userRepository.save(u);
-
-        String reason = (body != null && StringUtils.hasText(body.getReason())) ? body.getReason().trim() : null;
-
-        sendRejectionMailAfterCommit(u, reason);
-
-        Map<String, Object> resp = new LinkedHashMap<>();
-        resp.put("ok", true);
-        resp.put("status", "REJECTED");
-        if (reason != null) {
-            resp.put("reason", reason);
-        }
-        return ok(resp);
+    public ResponseEntity<?> rejectCompat(@PathVariable String userid,
+                                          @RequestBody(required = false) RejectRequest body) {
+        StatusChangeRequest r = new StatusChangeRequest();
+        r.setStatus(ApprovalStatus.REJECTED);
+        r.setReason(body != null ? body.getReason() : null);
+        return changeStatus(userid, r);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
-    // 내부: 메일 전송 (트랜잭션 커밋 후)
-    // ─────────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
+     * 메일 전송 (트랜잭션 커밋 후)
+     * ------------------------------------------------------------------------ */
     private void sendApprovalMailAfterCommit(UserEntity u) {
         final String to = safeEmail(u.getEmail());
-        if (to == null)
-            return;
+        if (to == null) return;
 
         final String when = LocalDateTime.now(KST).format(TS_FMT);
         final String subject = "[HopOn] 기사 회원 승인 완료: " + nonNull(u.getUserid());
@@ -279,8 +334,7 @@ public class DriverAdminController {
 
     private void sendRejectionMailAfterCommit(UserEntity u, String reason) {
         final String to = safeEmail(u.getEmail());
-        if (to == null)
-            return;
+        if (to == null) return;
 
         final String when = LocalDateTime.now(KST).format(TS_FMT);
         final String subject = "[HopOn] 기사 회원 승인 거절 안내: " + nonNull(u.getUserid());
@@ -315,11 +369,9 @@ public class DriverAdminController {
     /** 트랜잭션 커밋 후 메일 발송 */
     private void sendMailAfterCommit(String to, String subject, String htmlBody, String textBody) {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
+            @Override public void afterCommit() {
                 try {
                     MimeMessage msg = mailSender.createMimeMessage();
-                    // multipart=true (대안 텍스트/인라인 가능)
                     MimeMessageHelper helper = new MimeMessageHelper(msg, true, "UTF-8");
                     helper.setFrom(new InternetAddress(fromAddress, fromName, "UTF-8"));
                     helper.setTo(to);
@@ -340,25 +392,9 @@ public class DriverAdminController {
         });
     }
 
-    private static String nonNull(String s) {
-        return s == null ? "" : s;
-    }
-
-    private static String esc(String s) {
-        return HtmlUtils.htmlEscape(nonNull(s));
-    }
-
-    private static String safeEmail(String email) {
-        if (!StringUtils.hasText(email))
-            return null;
-        String e = email.trim();
-        return e.contains("@") ? e : null;
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────
-    // 내부: 매핑/유틸
-    // ─────────────────────────────────────────────────────────────────────────────
-    // DriverAdminController.java 내 매핑 유틸
+    /* ------------------------------------------------------------------------
+     * 매핑/유틸
+     * ------------------------------------------------------------------------ */
     private UserResponse toResponse(UserEntity u) {
         boolean hasDl = driverLicenseRepository.existsByUser_UserNum(u.getUserNum());
         boolean hasImg = u.getProfileImage() != null && u.getProfileImage().length > 0;
@@ -386,6 +422,20 @@ public class DriverAdminController {
                 .build();
     }
 
+    private static String nonNull(String s) {
+        return s == null ? "" : s;
+    }
+
+    private static String esc(String s) {
+        return HtmlUtils.htmlEscape(nonNull(s));
+    }
+
+    private static String safeEmail(String email) {
+        if (!StringUtils.hasText(email)) return null;
+        String e = email.trim();
+        return e.contains("@") ? e : null;
+    }
+
     private static String encodeFilename(String filename) {
         return URLEncoder.encode(filename, StandardCharsets.UTF_8).replace("+", "%20");
     }
@@ -406,16 +456,14 @@ public class DriverAdminController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ok", false);
         body.put("reason", reason);
-        if (extra != null)
-            body.putAll(extra);
+        if (extra != null) body.putAll(extra);
         return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
     }
 }
 
 /** 간단 MIME 스니퍼 */
 final class MimeSniffer {
-    private MimeSniffer() {
-    }
+    private MimeSniffer() {}
 
     static String guessImageContentType(byte[] b) {
         if (b == null || b.length < 4)
@@ -423,19 +471,16 @@ final class MimeSniffer {
         if ((b[0] & 0xFF) == 0xFF && (b[1] & 0xFF) == 0xD8 && (b[2] & 0xFF) == 0xFF)
             return MediaType.IMAGE_JPEG_VALUE; // JPEG
         if ((b[0] & 0xFF) == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47)
-            return MediaType.IMAGE_PNG_VALUE; // PNG
+            return MediaType.IMAGE_PNG_VALUE;  // PNG
         if (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38)
-            return MediaType.IMAGE_GIF_VALUE; // GIF
+            return MediaType.IMAGE_GIF_VALUE;  // GIF
         return MediaType.APPLICATION_OCTET_STREAM_VALUE;
     }
 
     static String extFor(String ct) {
-        if (MediaType.IMAGE_JPEG_VALUE.equals(ct))
-            return ".jpg";
-        if (MediaType.IMAGE_PNG_VALUE.equals(ct))
-            return ".png";
-        if (MediaType.IMAGE_GIF_VALUE.equals(ct))
-            return ".gif";
+        if (MediaType.IMAGE_JPEG_VALUE.equals(ct)) return ".jpg";
+        if (MediaType.IMAGE_PNG_VALUE.equals(ct))  return ".png";
+        if (MediaType.IMAGE_GIF_VALUE.equals(ct))  return ".gif";
         return ".bin";
     }
 }

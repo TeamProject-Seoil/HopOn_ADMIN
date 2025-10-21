@@ -21,9 +21,29 @@ public interface UserRepository extends JpaRepository<UserEntity, Long> {
     Optional<UserEntity> findByUserid(String userid);
     Optional<UserEntity> findByUseridIgnoreCase(String userid);
 
-    // 드라이버 상태별 조회
+    // 상태별 조회(그대로 유지)
     List<UserEntity> findByRoleAndApprovalStatus(Role role, ApprovalStatus approvalStatus);
     Page<UserEntity> findByRoleAndApprovalStatus(Role role, ApprovalStatus approvalStatus, Pageable pageable);
+
+    // ✅ 탭 카운트용 (counts API에서 사용)
+    long countByRoleAndApprovalStatus(Role role, ApprovalStatus approvalStatus);
+
+    // ✅ 검색 포함 페이지 조회 (userid/username LIKE, q가 null이면 전체)
+    @Query("""
+           select u
+           from UserEntity u
+           where u.role = :role
+             and u.approvalStatus = :status
+             and ( :q is null
+                   or lower(u.userid) like lower(concat('%', :q, '%'))
+                   or lower(u.username) like lower(concat('%', :q, '%')) )
+           """)
+    Page<UserEntity> searchByRoleAndStatus(
+            @Param("role") Role role,
+            @Param("status") ApprovalStatus status,
+            @Param("q") String q,
+            Pageable pageable
+    );
 
     // 하드 삭제
     @Modifying(clearAutomatically = true, flushAutomatically = true)
