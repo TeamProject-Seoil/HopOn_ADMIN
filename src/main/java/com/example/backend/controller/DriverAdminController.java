@@ -263,11 +263,14 @@ public class DriverAdminController {
 
         // 메일 발송
         if (target == ApprovalStatus.APPROVED) {
-            sendApprovalMailAfterCommit(u);
-        } else if (target == ApprovalStatus.REJECTED) {
-            String reason = StringUtils.hasText(req.getReason()) ? req.getReason().trim() : null;
-            sendRejectionMailAfterCommit(u, reason);
-        }
+    sendApprovalMailAfterCommit(u);
+} else if (target == ApprovalStatus.REJECTED) {
+    String reason = StringUtils.hasText(req.getReason()) ? req.getReason().trim() : null;
+    sendRejectionMailAfterCommit(u, reason);
+} else if (target == ApprovalStatus.PENDING) {
+    // ✅ 대기 전환 시에도 메일 알림
+    sendPendingMailAfterCommit(u);
+}
 
         return ok(Map.of("ok", true, "status", target.name()));
     }
@@ -331,6 +334,39 @@ public class DriverAdminController {
 
         sendMailAfterCommit(to, subject, html, text);
     }
+
+
+    private void sendPendingMailAfterCommit(UserEntity u) {
+    final String to = safeEmail(u.getEmail());
+    if (to == null) return;
+
+    final String when = LocalDateTime.now(KST).format(TS_FMT);
+    final String subject = "[HopOn] 기사 회원 상태 변경: 승인대기 - " + nonNull(u.getUserid());
+
+    final String html = """
+            <p>%s님, 안녕하세요.</p>
+            <p>기사 회원 상태가 <b style="color:#f59e0b">승인대기</b>로 변경되었습니다.</p>
+            <ul>
+              <li>아이디: <b>%s</b></li>
+              <li>처리일시: %s (KST)</li>
+            </ul>
+            <p>관리자 검토가 완료되면 별도 안내 메일을 드리겠습니다.</p>
+            <p style="color:#666;font-size:12px">※ 본 메일은 발신 전용입니다.</p>
+            """.formatted(esc(u.getUsername()), esc(u.getUserid()), esc(when));
+
+    final String text = """
+            %s님, 안녕하세요.
+            기사 회원 상태가 승인대기로 변경되었습니다.
+
+            아이디: %s
+            처리일시: %s (KST)
+
+            관리자 검토가 완료되면 안내 드리겠습니다.
+            """.formatted(nonNull(u.getUsername()), nonNull(u.getUserid()), when);
+
+    sendMailAfterCommit(to, subject, html, text);
+}
+
 
     private void sendRejectionMailAfterCommit(UserEntity u, String reason) {
         final String to = safeEmail(u.getEmail());
