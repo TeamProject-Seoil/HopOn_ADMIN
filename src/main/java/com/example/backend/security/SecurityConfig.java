@@ -52,47 +52,48 @@ public class SecurityConfig {
     }
 
     @Bean
-    public PasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(); }
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
 
     @Bean
-    public SecurityFilterChain filterChain(org.springframework.security.config.annotation.web.builders.HttpSecurity http) throws Exception {
+    public SecurityFilterChain filterChain(
+            org.springframework.security.config.annotation.web.builders.HttpSecurity http) throws Exception {
         var jwtFilter = new JwtAuthenticationFilter(tokenProvider, userRepository);
 
         http
-            .csrf(csrf -> csrf.disable())
-            .cors(Customizer.withDefaults())
-            .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(reg -> reg
-                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                .csrf(csrf -> csrf.disable())
+                .cors(Customizer.withDefaults())
+                .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(reg -> reg
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                // ✅ 공개 엔드포인트(최소)
-                .requestMatchers(HttpMethod.POST, "/auth/login", "/auth/refresh", "/auth/logout").permitAll()
-                .requestMatchers(HttpMethod.GET,  "/auth/check").permitAll() // 필요 시 유지/삭제
+                        // ✅ 공개 엔드포인트(최소)
+                        .requestMatchers(HttpMethod.POST, "/auth/login", "/auth/refresh", "/auth/logout").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/auth/check").permitAll() // 필요 시 유지/삭제
 
-                // ✅ 관리자 전용 영역
-                .requestMatchers("/admin/**").hasRole("ADMIN")
-                .requestMatchers("/users/**").hasRole("ADMIN")
+                        // ✅ 관리자 전용 영역
+                        .requestMatchers("/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/users/**").hasRole("ADMIN")
 
-                // 내부 헬스체크 등
-                .requestMatchers("/actuator/health", "/error").permitAll()
+                        // 내부 헬스체크 등
+                        .requestMatchers("/actuator/health", "/error").permitAll()
 
-                // 나머지는 인증 필요
-                .anyRequest().authenticated()
-            )
-            .authenticationProvider(authenticationProvider(userDetailsService()))
-            .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
-            .exceptionHandling(ex -> ex
-                .authenticationEntryPoint((req, res, e) -> {
-                    res.setStatus(401);
-                    res.setContentType("application/json;charset=UTF-8");
-                    res.getWriter().write("{\"error\":\"UNAUTHORIZED\"}");
-                })
-                .accessDeniedHandler((req, res, e) -> {
-                    res.setStatus(403);
-                    res.setContentType("application/json;charset=UTF-8");
-                    res.getWriter().write("{\"error\":\"FORBIDDEN\"}");
-                })
-            );
+                        // 나머지는 인증 필요
+                        .anyRequest().authenticated())
+                .authenticationProvider(authenticationProvider(userDetailsService()))
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint((req, res, e) -> {
+                            res.setStatus(401);
+                            res.setContentType("application/json;charset=UTF-8");
+                            res.getWriter().write("{\"error\":\"UNAUTHORIZED\"}");
+                        })
+                        .accessDeniedHandler((req, res, e) -> {
+                            res.setStatus(403);
+                            res.setContentType("application/json;charset=UTF-8");
+                            res.getWriter().write("{\"error\":\"FORBIDDEN\"}");
+                        }));
 
         return http.build();
     }

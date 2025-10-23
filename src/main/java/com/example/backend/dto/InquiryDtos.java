@@ -1,4 +1,3 @@
-// src/main/java/com/example/backend/dto/InquiryDtos.java
 package com.example.backend.dto;
 
 import com.example.backend.entity.InquiryEntity;
@@ -13,7 +12,9 @@ import java.util.List;
 
 public class InquiryDtos {
 
-    @Getter @Setter @Builder
+    @Getter
+    @Setter
+    @Builder
     public static class AttachmentMeta {
         private Long id;
         private String filename;
@@ -21,7 +22,9 @@ public class InquiryDtos {
         private long size;
     }
 
-    @Getter @Setter @Builder
+    @Getter
+    @Setter
+    @Builder
     public static class ReplyInfo {
         private Long id;
         private String message;
@@ -29,7 +32,9 @@ public class InquiryDtos {
         private String createdAt;
     }
 
-    @Getter @Setter @Builder
+    @Getter
+    @Setter
+    @Builder
     public static class InquiryListItem {
         private Long id;
         private String title;
@@ -39,9 +44,13 @@ public class InquiryDtos {
         private InquiryStatus status;
         private String createdAt;
         private String updatedAt;
+        // 목록에 굳이 비밀글 여부가 필요 없으면 제외해도 되지만, 필요하면 주석 해제
+        // private boolean isSecret;
     }
 
-    @Getter @Setter @Builder
+    @Getter
+    @Setter
+    @Builder
     public static class InquiryDetail {
         private Long id;
         private String title;
@@ -50,6 +59,7 @@ public class InquiryDtos {
         private String userid;
         private String email;
         private InquiryStatus status;
+        private boolean isSecret; // ✅ 상세에서 비밀글 여부 확인 가능
         private String createdAt;
         private String updatedAt;
         private List<AttachmentMeta> attachments;
@@ -66,6 +76,7 @@ public class InquiryDtos {
                 .status(e.getStatus())
                 .createdAt(toIso(e.getCreatedAt()))
                 .updatedAt(toIso(e.getUpdatedAt()))
+                // .isSecret(e.isSecret())
                 .build();
     }
 
@@ -78,6 +89,7 @@ public class InquiryDtos {
                 .userid(e.getUserid())
                 .email(e.getEmail())
                 .status(e.getStatus())
+                .isSecret(e.isSecret())
                 .createdAt(toIso(e.getCreatedAt()))
                 .updatedAt(toIso(e.getUpdatedAt()))
                 .attachments(e.getAttachments().stream().map(InquiryDtos::toMeta).toList())
@@ -85,7 +97,7 @@ public class InquiryDtos {
                 .build();
     }
 
-    private static AttachmentMeta toMeta(InquiryAttachmentEntity a){
+    private static AttachmentMeta toMeta(InquiryAttachmentEntity a) {
         return AttachmentMeta.builder()
                 .id(a.getId())
                 .filename(a.getFilename())
@@ -93,7 +105,8 @@ public class InquiryDtos {
                 .size(a.getSize())
                 .build();
     }
-    private static ReplyInfo toReply(InquiryReplyEntity r){
+
+    private static ReplyInfo toReply(InquiryReplyEntity r) {
         return ReplyInfo.builder()
                 .id(r.getId())
                 .message(r.getMessage())
@@ -102,8 +115,10 @@ public class InquiryDtos {
                 .build();
     }
 
-    private static String toIso(java.time.LocalDateTime t){
-        if (t == null) return null;
+    private static String toIso(java.time.LocalDateTime t) {
+        if (t == null)
+            return null;
+        // DB는 timezone 미포함 → UTC 기준 ISO 문자열로 직렬화(기존 로직 유지)
         return OffsetDateTime.of(t, ZoneOffset.UTC).toString();
     }
 }
