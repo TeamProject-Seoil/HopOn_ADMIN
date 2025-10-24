@@ -19,8 +19,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -55,11 +55,11 @@ public class AuthController {
 
     // ── Admin-only: LOGIN ─────────────────────────────────────────────────────
     @PostMapping("/login")
-    public ResponseEntity<?> login(@Validated @RequestBody AuthRequest req) {
+    public ResponseEntity<?> login(@Validated @RequestBody AuthRequest req,
+            @RequestHeader(value = "X-Force-Login", required = false) String forceHeader) {
         try {
             authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(req.getUserid(), req.getPassword())
-            );
+                    new UsernamePasswordAuthenticationToken(req.getUserid(), req.getPassword()));
         } catch (Exception e) {
             log.warn("로그인 실패 - 자격증명 불일치: userid={}", req.getUserid());
             return ResponseEntity.status(401).header("X-Reason", "BAD_CREDENTIALS").build();
@@ -70,7 +70,7 @@ public class AuthController {
 
         final String role = user.getRole().name();
         final String clientType = req.getClientType();
-        final String deviceId   = req.getDeviceId();
+        final String deviceId = req.getDeviceId();
 
         // 관리자 전용 백엔드: ADMIN_APP + ROLE_ADMIN 만 허용
         if (!isAllowed(clientType, role)) {
@@ -79,13 +79,18 @@ public class AuthController {
             return ResponseEntity.status(403).header("X-Reason", "ROLE_NOT_ALLOWED_FOR_APP").build();
         }
 
-        // 기기 세션 단일화(동일 앱에서 다른 기기 로그인 차단)
+        final boolean forceLogin = "1".equals(forceHeader);
+
+        // ✅ 충돌 감지: 동일 (user, clientType)에 유효 세션이 있는데 deviceId가 다르면 409로 모달 트리거
         var existing = sessionRepository.findByUserAndClientType(user, clientType);
-        if (existing.isPresent()) {
+        if (existing.isPresent() && !forceLogin) {
             var s = existing.get();
-            boolean stillValid = !s.isRevoked() && s.getExpiresAt().isAfter(LocalDateTime.now());
-            if (stillValid && !s.getDeviceId().equals(deviceId)) {
-                log.warn("로그인 실패 - 다른 기기에서 이미 로그인 중: userid={}, app={}, existingDevice={}, requestDevice={}",
+            boolean stillValid = !s.isRevoked()
+                    && s.getExpiresAt() != null
+                    && s.getExpiresAt().isAfter(LocalDateTime.now());
+            boolean differentDevice = s.getDeviceId() != null && !s.getDeviceId().equals(deviceId);
+            if (stillValid && differentDevice) {
+                log.info("로그인 충돌 감지 → 409: userid={}, app={}, existingDevice={}, reqDevice={}",
                         req.getUserid(), clientType, s.getDeviceId(), deviceId);
                 return ResponseEntity.status(409)
                         .header("X-Reason", "ALREADY_LOGGED_IN_OTHER_DEVICE")
@@ -93,10 +98,17 @@ public class AuthController {
             }
         }
 
-        // 토큰 발급 + 세션 업서트
-        String access  = tokenProvider.generateAccessToken(user.getUserid(), role, clientType);
-        String refresh = tokenProvider.generateRefreshToken(user.getUserid(), role, clientType);
-        upsertSession(user, clientType, deviceId, refresh);
+        // 같은 (user, clientType) 세션 upsert (forceLogin이거나 충돌 아님)
+        var session = upsertSession(user, clientType, deviceId);
+
+        // 1) refresh 생성 → 2) 해시 저장(회전) → 3) ver(해시 프린트) 계산 → 4) access 생성
+        String refresh = tokenProvider.generateRefreshToken(user.getUserid(), role, clientType, deviceId,
+                session.getId());
+        setRefreshHash(session, refresh);
+        String ver = shortVer(session.getRefreshTokenHash());
+
+        String access = tokenProvider.generateAccessToken(
+                user.getUserid(), role, clientType, deviceId, session.getId(), ver);
 
         // 메타 업데이트
         var now = LocalDateTime.now();
@@ -104,7 +116,8 @@ public class AuthController {
         user.setLastRefreshAt(now);
         userRepository.save(user);
 
-        log.info("관리자 로그인 성공: userid={}, role={}, app={}, device={}", req.getUserid(), role, clientType, deviceId);
+        log.info("관리자 로그인 성공(세션 갱신): userid={}, role={}, app={}, device={}, sid={}, ver={}, forced={}",
+                req.getUserid(), role, clientType, deviceId, session.getId(), ver, forceLogin);
         return ResponseEntity.ok(new AuthResponse(access, refresh, "Bearer", role));
     }
 
@@ -112,19 +125,13 @@ public class AuthController {
     @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/register")
     public ResponseEntity<?> adminRegister(@Validated @RequestBody AdminRegisterRequest req,
-                                           Authentication auth) {
-        // 필요 시 이중 방어(클라이언트 헤더/프록시에서 보증): ADMIN_APP + ROLE_ADMIN 만 허용
-        // @PreAuthorize로 이미 ROLE_ADMIN 보장됨.
-
-        // 1) 정규화
+            Authentication auth) {
         String userid = normalizeUserid(req.getUserid());
 
-        // 2) 중복 검사
         if (userRepository.existsByUserid(userid)) {
             return ResponseEntity.status(409).body(Map.of("ok", false, "reason", "DUPLICATE_USERID"));
         }
 
-        // 3) 역할 및 승인 상태 기본값
         Role role = (req.getRole() == null) ? Role.ROLE_USER : req.getRole();
         ApprovalStatus approval = null;
         if (role == Role.ROLE_DRIVER) {
@@ -134,7 +141,6 @@ public class AuthController {
         var user = UserEntity.builder()
                 .userid(userid)
                 .username(req.getUsername() == null ? null : req.getUsername().trim())
-                // 이메일/전화/회사/프로필 미사용 → 모두 null
                 .role(role)
                 .approvalStatus(approval)
                 .password(passwordEncoder.encode(req.getPassword()))
@@ -149,10 +155,12 @@ public class AuthController {
     // DTO
     @Data
     public static class AdminRegisterRequest {
-        @NotBlank @Size(min = 4, max = 50)
+        @NotBlank
+        @Size(min = 4, max = 50)
         private String userid;
 
-        @NotBlank @Size(min = 8, max = 100)
+        @NotBlank
+        @Size(min = 8, max = 100)
         private String password;
 
         @Size(max = 100)
@@ -166,9 +174,8 @@ public class AuthController {
     @PostMapping("/refresh")
     public ResponseEntity<AuthResponse> refresh(
             @RequestParam("refreshToken") String refreshToken,
-            @RequestParam("clientType")   String clientType,
-            @RequestParam("deviceId")     String deviceId
-    ) {
+            @RequestParam("clientType") String clientType,
+            @RequestParam("deviceId") String deviceId) {
         if (!tokenProvider.validate(refreshToken))
             throw new BadCredentialsException("Refresh token invalid");
 
@@ -206,10 +213,14 @@ public class AuthController {
             throw new BadCredentialsException("Role not allowed for this app");
         }
 
-        // 회전
-        String newAccess  = tokenProvider.generateAccessToken(userid, role, clientType);
-        String newRefresh = tokenProvider.generateRefreshToken(userid, role, clientType);
-        rotateSession(session, newRefresh);
+        // 만료 갱신
+        rotateSession(session);
+
+        // 새 토큰 회전: refresh → 해시 저장 → ver 재계산 → access
+        String newRefresh = tokenProvider.generateRefreshToken(userid, role, clientType, deviceId, session.getId());
+        setRefreshHash(session, newRefresh);
+        String ver = shortVer(session.getRefreshTokenHash());
+        String newAccess = tokenProvider.generateAccessToken(userid, role, clientType, deviceId, session.getId(), ver);
 
         user.setLastRefreshAt(LocalDateTime.now());
         userRepository.save(user);
@@ -242,7 +253,8 @@ public class AuthController {
         var session = sessionOpt.get();
         String hash = com.example.backend.service.HashUtils.sha256Hex(req.getRefreshToken());
         if (!hash.equals(session.getRefreshTokenHash())) {
-            log.warn("로그아웃 실패 - refreshToken 불일치: userid={}, app={}, device={}", userid, req.getClientType(), req.getDeviceId());
+            log.warn("로그아웃 실패 - refreshToken 불일치: userid={}, app={}, device={}", userid, req.getClientType(),
+                    req.getDeviceId());
             return ResponseEntity.status(400).body(Map.of("ok", false, "reason", "REFRESH_TOKEN_MISMATCH"));
         }
 
@@ -258,13 +270,13 @@ public class AuthController {
         @NotBlank
         private String currentPassword;
         private String clientType; // 기록/감사용
-        private String deviceId;   // 기록/감사용
+        private String deviceId; // 기록/감사용
     }
 
     @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/verify-current-password")
     public ResponseEntity<?> verifyCurrentPassword(Authentication authentication,
-                                                   @RequestBody @Validated VerifyCurrentPasswordRequest req) {
+            @RequestBody @Validated VerifyCurrentPasswordRequest req) {
         if (authentication == null || authentication.getPrincipal() == null) {
             return ResponseEntity.status(401).body(Map.of("ok", false, "reason", "UNAUTHORIZED"));
         }
@@ -298,56 +310,75 @@ public class AuthController {
         return raw == null ? null : raw.trim().toLowerCase();
     }
 
-    private void upsertSession(UserEntity user, String clientType, String deviceId, String refreshToken) {
+    /** upsert: (user, clientType) 단일 행을 갱신/생성하고 반환 */
+    private UserSession upsertSession(UserEntity user, String clientType, String deviceId) {
         var now = LocalDateTime.now();
-        var exp = now.plusDays(refreshExpDays);
+        var desiredExp = now.plusDays(refreshExpDays);
 
         var opt = sessionRepository.findByUserAndClientType(user, clientType);
         if (opt.isPresent()) {
             var s = opt.get();
             s.setDeviceId(deviceId);
-            s.setRefreshTokenHash(com.example.backend.service.HashUtils.sha256Hex(refreshToken));
-            s.setExpiresAt(applyAbsoluteCapIfNeeded(s, exp));
+            s.setRefreshTokenHash(""); // refresh 발급 직후 setRefreshHash에서 세팅
+            s.setExpiresAt(applyAbsoluteCapIfNeeded(s, desiredExp));
             s.setRevoked(false);
-            sessionRepository.save(s);
+            sessionRepository.saveAndFlush(s);
+            return s;
         } else {
             var s = UserSession.builder()
                     .user(user)
                     .clientType(clientType)
                     .deviceId(deviceId)
-                    .refreshTokenHash(com.example.backend.service.HashUtils.sha256Hex(refreshToken))
-                    .expiresAt(exp)
+                    .refreshTokenHash("") // 나중에 해시 세팅
+                    .expiresAt(desiredExp)
                     .revoked(false)
                     .build();
-            sessionRepository.save(s);
+            sessionRepository.saveAndFlush(s);
             if (refreshAbsoluteMaxDays > 0) {
                 s.setExpiresAt(applyAbsoluteCapIfNeeded(s, s.getExpiresAt()));
-                sessionRepository.save(s);
+                sessionRepository.saveAndFlush(s);
             }
+            return s;
         }
     }
 
-    private void rotateSession(UserSession s, String newRefreshToken) {
+    /** 회전: 만료/상태 갱신 (버전은 refresh 해시 교체로 표현) */
+    private void rotateSession(UserSession s) {
         if (isAbsoluteCapExceeded(s)) {
             s.setRevoked(true);
             sessionRepository.save(s);
             throw new BadCredentialsException("Session absolute lifetime exceeded");
         }
         var now = LocalDateTime.now();
-        s.setRefreshTokenHash(com.example.backend.service.HashUtils.sha256Hex(newRefreshToken));
         var desiredExp = now.plusDays(refreshExpDays);
         s.setExpiresAt(applyAbsoluteCapIfNeeded(s, desiredExp));
-        sessionRepository.save(s);
+        s.setRevoked(false);
+        sessionRepository.saveAndFlush(s);
+    }
+
+    /** refresh 토큰 해시 저장 */
+    private void setRefreshHash(UserSession s, String refreshToken) {
+        s.setRefreshTokenHash(com.example.backend.service.HashUtils.sha256Hex(refreshToken));
+        sessionRepository.saveAndFlush(s);
+    }
+
+    /** refresh 해시 프린트(앞 16자)를 ver로 사용 */
+    private String shortVer(String refreshHash) {
+        if (refreshHash == null)
+            return "";
+        return refreshHash.length() <= 16 ? refreshHash : refreshHash.substring(0, 16);
     }
 
     private LocalDateTime applyAbsoluteCapIfNeeded(UserSession s, LocalDateTime desiredExp) {
-        if (refreshAbsoluteMaxDays <= 0) return desiredExp;
+        if (refreshAbsoluteMaxDays <= 0)
+            return desiredExp;
         var capEnd = s.getCreatedAt().plusDays(refreshAbsoluteMaxDays);
         return desiredExp.isAfter(capEnd) ? capEnd : desiredExp;
     }
 
     private boolean isAbsoluteCapExceeded(UserSession s) {
-        if (refreshAbsoluteMaxDays <= 0) return false;
+        if (refreshAbsoluteMaxDays <= 0)
+            return false;
         var capEnd = s.getCreatedAt().plusDays(refreshAbsoluteMaxDays);
         return LocalDateTime.now().isAfter(capEnd);
     }

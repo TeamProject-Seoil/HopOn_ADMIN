@@ -2,6 +2,7 @@
 package com.example.backend.security;
 
 import com.example.backend.repository.UserRepository;
+import com.example.backend.repository.UserSessionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.*;
 import org.springframework.http.HttpMethod;
@@ -27,6 +28,7 @@ public class SecurityConfig {
 
     private final JwtTokenProvider tokenProvider;
     private final UserRepository userRepository;
+    private final UserSessionRepository sessionRepository;
 
     @Bean
     public UserDetailsService userDetailsService() {
@@ -59,7 +61,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(
             org.springframework.security.config.annotation.web.builders.HttpSecurity http) throws Exception {
-        var jwtFilter = new JwtAuthenticationFilter(tokenProvider, userRepository);
+        var jwtFilter = new JwtAuthenticationFilter(tokenProvider, userRepository, sessionRepository);
 
         http
                 .csrf(csrf -> csrf.disable())
@@ -70,7 +72,7 @@ public class SecurityConfig {
 
                         // ✅ 공개 엔드포인트(최소)
                         .requestMatchers(HttpMethod.POST, "/auth/login", "/auth/refresh", "/auth/logout").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/auth/check").permitAll() // 필요 시 유지/삭제
+                        .requestMatchers(HttpMethod.GET, "/auth/check").permitAll()
 
                         // ✅ 관리자 전용 영역
                         .requestMatchers("/admin/**").hasRole("ADMIN")
