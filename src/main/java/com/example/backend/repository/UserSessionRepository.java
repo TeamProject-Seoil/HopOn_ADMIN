@@ -21,7 +21,16 @@ public interface UserSessionRepository extends JpaRepository<UserSession, Long> 
 
     List<UserSession> findByUserAndRevokedIsFalse(UserEntity user);
 
-    // ✅ 필터에서 LazyInitializationException 방지: user를 즉시 페치해서 가져온다
+    // ✅ 활성 여부 판단용
+    List<UserSession> findByUserAndRevokedIsFalseAndExpiresAtAfter(UserEntity user, LocalDateTime now);
+
+    // ✅ 상세에서 최신순으로 세션 열람
+    List<UserSession> findByUserOrderByUpdatedAtDesc(UserEntity user);
+
+    // ✅ 특정 사용자 소유 세션만 타겟팅
+    Optional<UserSession> findByIdAndUser(Long id, UserEntity user);
+
+    // ✅ 필터에서 LazyInitializationException 방지: user를 즉시 페치해서 가져온다 (기존)
     @Query("select s from UserSession s join fetch s.user where s.id = :id")
     Optional<UserSession> findByIdFetchUser(@Param("id") Long id);
 }
