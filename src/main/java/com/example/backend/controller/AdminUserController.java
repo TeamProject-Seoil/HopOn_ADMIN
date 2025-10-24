@@ -13,15 +13,16 @@ import jakarta.validation.constraints.Size;
 import lombok.*;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.domain.*;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.*;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StreamUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -136,8 +137,8 @@ public class AdminUserController {
     @GetMapping("/{userid}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<UserDetailResp> detail(@PathVariable String userid) {
-        String id = norm(userid);
-        var u = userRepository.findByUserid(id).orElse(null);
+        String id = normalizeUserid(userid);
+        var u = userRepository.findByUseridIgnoreCase(id).orElse(null);
         if (u == null)
             return ResponseEntity.status(404).body(null);
 
@@ -160,8 +161,8 @@ public class AdminUserController {
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
     public ResponseEntity<?> revokeOne(@PathVariable String userid, @PathVariable Long sessionId) {
-        String id = norm(userid);
-        var user = userRepository.findByUserid(id).orElse(null);
+        String id = normalizeUserid(userid);
+        var user = userRepository.findByUseridIgnoreCase(id).orElse(null);
         if (user == null)
             return ResponseEntity.status(404).body(Map.of("ok", false, "reason", "USER_NOT_FOUND"));
 
@@ -182,8 +183,8 @@ public class AdminUserController {
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
     public ResponseEntity<?> revokeAll(@PathVariable String userid) {
-        String id = norm(userid);
-        var user = userRepository.findByUserid(id).orElse(null);
+        String id = normalizeUserid(userid);
+        var user = userRepository.findByUseridIgnoreCase(id).orElse(null);
         if (user == null)
             return ResponseEntity.status(404).body(Map.of("ok", false, "reason", "USER_NOT_FOUND"));
 
@@ -194,7 +195,7 @@ public class AdminUserController {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 5) 역할 변경 (자기강등 방지 + 마지막 관리자 보호)
+    // 5) 역할 변경 (자기강등 방지 + 마지막 관리자 보호) **approval_status null 금지**
     // ─────────────────────────────────────────────────────────────────────
     @PostMapping("/{userid}/role")
     @PreAuthorize("hasRole('ADMIN')")
@@ -202,9 +203,11 @@ public class AdminUserController {
     public ResponseEntity<?> changeRole(@PathVariable String userid,
             @RequestBody @Validated ChangeRoleReq req,
             Authentication auth) {
-        String targetId = norm(userid);
-        String actor = norm((String) auth.getPrincipal());
-        var userOpt = userRepository.findByUserid(targetId);
+
+        String targetId = normalizeUserid(userid);
+        String actor = normalizeUserid(auth.getName());
+
+        var userOpt = userRepository.findByUseridIgnoreCase(targetId);
         if (userOpt.isEmpty())
             return ResponseEntity.status(404).body(Map.of("ok", false, "reason", "NOT_FOUND"));
 
@@ -213,11 +216,13 @@ public class AdminUserController {
         if (newRole == null)
             return ResponseEntity.badRequest().body(Map.of("ok", false, "reason", "ROLE_REQUIRED"));
 
+        // 자기강등 금지
         if (u.getRole() == Role.ROLE_ADMIN && actor != null && actor.equals(targetId)
                 && newRole != Role.ROLE_ADMIN) {
             return ResponseEntity.status(403).body(Map.of("ok", false, "reason", "CANNOT_DEMOTE_SELF"));
         }
 
+        // 마지막 관리자 보호
         if (u.getRole() == Role.ROLE_ADMIN && newRole != Role.ROLE_ADMIN) {
             long admins = userRepository.findAll().stream()
                     .filter(x -> x.getRole() == Role.ROLE_ADMIN)
@@ -227,11 +232,21 @@ public class AdminUserController {
             }
         }
 
+        // 역할 저장
         u.setRole(newRole);
-        if (newRole != Role.ROLE_DRIVER)
-            u.setApprovalStatus(null);
-        userRepository.save(u);
 
+        // ✅ approval_status: NOT NULL 보장
+        if (newRole == Role.ROLE_DRIVER) {
+            if (u.getApprovalStatus() == null) {
+                u.setApprovalStatus(ApprovalStatus.PENDING);
+            }
+        } else {
+            if (u.getApprovalStatus() == null) {
+                u.setApprovalStatus(ApprovalStatus.APPROVED);
+            }
+        }
+
+        userRepository.save(u);
         return ResponseEntity.ok(Map.of("ok", true, "role", newRole.name()));
     }
 
@@ -249,8 +264,8 @@ public class AdminUserController {
     @Transactional
     public ResponseEntity<?> changeApproval(@PathVariable String userid,
             @RequestBody @Validated ChangeApprovalReq req) {
-        String id = norm(userid);
-        var u = userRepository.findByUserid(id).orElse(null);
+        String id = normalizeUserid(userid);
+        var u = userRepository.findByUseridIgnoreCase(id).orElse(null);
         if (u == null)
             return ResponseEntity.status(404).body(Map.of("ok", false, "reason", "NOT_FOUND"));
         if (u.getRole() != Role.ROLE_DRIVER)
@@ -268,8 +283,7 @@ public class AdminUserController {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 7) 계정 생성 — ROLE_ADMIN만 생성 가능
-    // + 회사명=HopOn, 승인상태=APPROVED, 기본 프로필 이미지(LONGBLOB) 자동 세팅
+    // 7) 계정 생성 — ROLE_ADMIN만 생성 가능 + 기본 프로필 이미지 저장
     // (classpath: static/profile_image/default_profile_image.jpg)
     // ─────────────────────────────────────────────────────────────────────
     @PostMapping
@@ -278,7 +292,7 @@ public class AdminUserController {
     public ResponseEntity<?> create(@Validated @RequestBody AdminCreateUserRequest req) {
         String userid = normalizeUserid(req.getUserid());
 
-        if (userRepository.existsByUserid(userid)) {
+        if (userRepository.existsByUseridIgnoreCase(userid)) {
             return ResponseEntity.status(409).body(Map.of("ok", false, "reason", "DUPLICATE_USERID"));
         }
 
@@ -300,31 +314,45 @@ public class AdminUserController {
                     "message", pwReason));
         }
 
-        // 기본 프로필 이미지 로드
-        byte[] defaultProfile = null;
-        try (var in = new ClassPathResource("static/profile_image/default_profile_image.jpg").getInputStream()) {
-            defaultProfile = StreamUtils.copyToByteArray(in);
-        } catch (Exception ignore) {
-            // 없거나 실패하면 null → 프론트에서 기본 이미지 fallback
-        }
+        // 기본 프로필 이미지 로딩 (없어도 에러 없이 통과)
+        byte[] defaultImage = loadDefaultProfileImage();
 
         var user = UserEntity.builder()
                 .userid(userid)
                 .password(passwordEncoder.encode(req.getPassword()))
                 .username(req.getUsername() == null ? null : req.getUsername().trim())
-                // 🔽 NOT NULL 회피용 자동 이메일
                 .email(userid + "@hopon.local")
                 .role(Role.ROLE_ADMIN)
                 .company("HopOn")
-                .approvalStatus(ApprovalStatus.APPROVED)
-                .profileImage(defaultProfile)
+                .approvalStatus(ApprovalStatus.APPROVED) // NOT NULL 보장
                 .build();
+
+        // 있으면 저장
+        if (defaultImage != null && defaultImage.length > 0) {
+            user.setProfileImage(defaultImage);
+        }
 
         userRepository.save(user);
 
         return ResponseEntity
                 .created(URI.create("/admin/users/" + user.getUserid()))
                 .body(Map.of("ok", true, "userid", user.getUserid(), "role", "ROLE_ADMIN"));
+    }
+
+    /**
+     * 기본 프로필 이미지를 classpath에서 읽어 byte[]로 반환.
+     * 경로: classpath:/static/profile_image/default_profile_image.jpg
+     * 파일이 없거나 읽기 실패 시 null 반환.
+     */
+    private byte[] loadDefaultProfileImage() {
+        ClassPathResource resource = new ClassPathResource("static/profile_image/default_profile_image.jpg");
+        if (!resource.exists())
+            return null;
+        try (InputStream is = resource.getInputStream()) {
+            return is.readAllBytes();
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -337,7 +365,7 @@ public class AdminUserController {
         String target = normalizeUserid(userid);
         String actor = normalizeUserid((String) auth.getPrincipal());
 
-        var userOpt = userRepository.findByUserid(target);
+        var userOpt = userRepository.findByUseridIgnoreCase(target);
         if (userOpt.isEmpty())
             return ResponseEntity.status(404).body(Map.of("ok", false, "reason", "NOT_FOUND"));
 
@@ -372,7 +400,7 @@ public class AdminUserController {
         String target = normalizeUserid(userid);
         String actor = normalizeUserid((String) auth.getPrincipal());
 
-        var userOpt = userRepository.findByUserid(target);
+        var userOpt = userRepository.findByUseridIgnoreCase(target);
         if (userOpt.isEmpty())
             return ResponseEntity.status(404).body(Map.of("ok", false, "reason", "NOT_FOUND"));
 
@@ -403,7 +431,6 @@ public class AdminUserController {
         @Size(min = 4, max = 50)
         private String userid;
 
-        // (수정) 8~64자
         @NotBlank
         @Size(min = 8, max = 64)
         private String password;
