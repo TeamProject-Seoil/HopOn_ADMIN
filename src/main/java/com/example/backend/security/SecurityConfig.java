@@ -78,6 +78,10 @@ public class SecurityConfig {
                         .requestMatchers("/admin/**").hasRole("ADMIN")
                         .requestMatchers("/users/**").hasRole("ADMIN")
 
+                         // ✅ 예약 API: 인증만 필요 (USER/DRIVER/ADMIN 모두)
+                        .requestMatchers("/reservations/**").authenticated()
+
+
                         // 내부 헬스체크 등
                         .requestMatchers("/actuator/health", "/error").permitAll()
 

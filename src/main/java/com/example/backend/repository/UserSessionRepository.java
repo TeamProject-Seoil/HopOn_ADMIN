@@ -5,6 +5,7 @@ import com.example.backend.entity.UserEntity;
 import com.example.backend.entity.UserSession;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
@@ -33,4 +34,9 @@ public interface UserSessionRepository extends JpaRepository<UserSession, Long> 
     // ✅ 필터에서 LazyInitializationException 방지: user를 즉시 페치해서 가져온다 (기존)
     @Query("select s from UserSession s join fetch s.user where s.id = :id")
     Optional<UserSession> findByIdFetchUser(@Param("id") Long id);
+
+    // ✅ 해당 사용자 세션 전부 삭제 (하드 삭제)
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("delete from UserSession s where s.user = :user")
+    int deleteByUser(@Param("user") UserEntity user);
 }

@@ -28,6 +28,9 @@ public interface UserRepository extends JpaRepository<UserEntity, Long> {
     // ✅ 탭 카운트용 (counts API에서 사용)
     long countByRoleAndApprovalStatus(Role role, ApprovalStatus approvalStatus);
 
+    // ✅ 역할별 인원수 (마지막 관리자 보호용)
+    long countByRole(Role role);
+
     // ✅ 검색 포함 페이지 조회 (userid/username LIKE, q가 null이면 전체)
     @Query("""
            select u

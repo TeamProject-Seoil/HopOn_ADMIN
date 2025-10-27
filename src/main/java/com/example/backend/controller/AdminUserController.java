@@ -1,3 +1,4 @@
+// src/main/java/com/example/backend/controller/AdminUserController.java
 package com.example.backend.controller;
 
 import com.example.backend.entity.ApprovalStatus;
@@ -356,7 +357,7 @@ public class AdminUserController {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 8) 계정 삭제 (본인 삭제 금지 + 마지막 관리자 보호)
+    // 8) 계정 삭제 (본인 삭제 금지 + 마지막 관리자 보호)  ✅ 세션 정리 포함
     // ─────────────────────────────────────────────────────────────────────
     @DeleteMapping("/{userid}")
     @PreAuthorize("hasRole('ADMIN')")
@@ -375,17 +376,80 @@ public class AdminUserController {
             return ResponseEntity.status(403).body(Map.of("ok", false, "reason", "CANNOT_DELETE_SELF"));
 
         if (u.getRole() == Role.ROLE_ADMIN) {
-            long admins = userRepository.findAll().stream()
-                    .filter(x -> x.getRole() == Role.ROLE_ADMIN)
-                    .count();
+            long admins = userRepository.countByRole(Role.ROLE_ADMIN);
             if (admins <= 1)
                 return ResponseEntity.status(409).body(Map.of("ok", false, "reason", "LAST_ADMIN_PROTECTED"));
         }
+
+        // ✅ 세션 하드 정리
+        sessionRepository.deleteByUser(u);
 
         int affected = userRepository.hardDeleteByUserid(target);
         if (affected == 0)
             return ResponseEntity.status(404).body(Map.of("ok", false, "reason", "NOT_FOUND"));
         return ResponseEntity.ok(Map.of("ok", true, "message", "DELETED", "userid", target));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 8-1) 일괄 삭제 (본인 포함 금지 + 마지막 관리자 보호)  ✅ 세션 정리 포함
+    // ─────────────────────────────────────────────────────────────────────
+    @PostMapping("/bulk-delete")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Transactional
+    public ResponseEntity<?> bulkDelete(@RequestBody BulkDeleteReq req, Authentication auth) {
+        if (req == null || req.getUserids() == null || req.getUserids().isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("ok", false, "reason", "EMPTY_LIST"));
+        }
+
+        String actor = normalizeUserid((String) auth.getPrincipal());
+        List<String> targets = req.getUserids().stream()
+                .filter(Objects::nonNull)
+                .map(AdminUserController::normalizeUserid)
+                .distinct()
+                .toList();
+
+        if (actor != null && targets.contains(actor)) {
+            return ResponseEntity.status(403).body(Map.of("ok", false, "reason", "CANNOT_DELETE_SELF"));
+        }
+
+        var users = targets.stream()
+                .map(u -> userRepository.findByUseridIgnoreCase(u).orElse(null))
+                .filter(Objects::nonNull)
+                .toList();
+
+        var notFound = new ArrayList<String>();
+        for (String id : targets) {
+            boolean exists = users.stream().anyMatch(u -> u.getUserid().equalsIgnoreCase(id));
+            if (!exists) notFound.add(id);
+        }
+
+        long adminCount = userRepository.countByRole(Role.ROLE_ADMIN);
+        long adminToDelete = users.stream().filter(u -> u.getRole() == Role.ROLE_ADMIN).count();
+        if (adminToDelete >= adminCount) {
+            return ResponseEntity.status(409).body(Map.of("ok", false, "reason", "LAST_ADMIN_PROTECTED"));
+        }
+
+        int deleted = 0;
+        for (UserEntity u : users) {
+            if (u.getRole() == Role.ROLE_ADMIN) {
+                long left = userRepository.countByRole(Role.ROLE_ADMIN);
+                if (left <= 1) {
+                    break;
+                }
+            }
+            // 세션 정리
+            sessionRepository.deleteByUser(u);
+            // 사용자 삭제
+            int affected = userRepository.hardDeleteByUserid(u.getUserid());
+            deleted += affected;
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "ok", true,
+                "requested", targets.size(),
+                "deleted", deleted,
+                "notFound", notFound
+        ));
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -531,6 +595,11 @@ public class AdminUserController {
                     .updatedAtIso(toIso(s.getUpdatedAt()))
                     .build();
         }
+    }
+
+    @Data
+    public static class BulkDeleteReq {
+        private List<String> userids;
     }
 
     private static String toIso(LocalDateTime t) {

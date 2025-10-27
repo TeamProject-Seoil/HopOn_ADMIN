@@ -47,4 +47,5 @@ public class AuthUserResolver {
     private static String normalizeUserid(String raw) {
         return raw == null ? null : raw.trim().toLowerCase();
     }
+    
 }
