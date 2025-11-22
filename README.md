@@ -54,36 +54,37 @@
 
 <table>
   <tr>
-    <th style="width:90px;">이름</th>
-    <th style="width:70px;">역할</th>
-    <th style="width:700px;">담당</th>
+    <th style="width:110px;">이름</th>
+    <th style="width:80px;">역할</th>
+    <th style="width:670px;">담당</th>
   </tr>
   <tr>
     <td><b>조건희</b></td>
     <td>팀장</td>
-    <td>사용자 앱 UI 개발, 기사 앱 UI 개발, 주요 화면 구성 및 컴포넌트 제작, PPT 제작, 팀 일정/역할 관리</td>
+    <td>사용자/기사 앱 UI 개발, 주요 화면 구성, 컴포넌트 제작, PPT·일정 관리</td>
   </tr>
   <tr>
     <td><b>김민재</b></td>
     <td>팀원</td>
-    <td>사용자 앱 UI 개발, 기사 앱 UI 개발, 주요 화면 구성 및 컴포넌트 제작, 발표</td>
+    <td>사용자/기사 앱 UI 개발, 주요 화면 구성, 발표</td>
   </tr>
   <tr>
     <td><b>유주현</b></td>
     <td>팀원</td>
-    <td>사용자 앱 UI 개발, 기사 앱 UI 개발, 주요 화면 구성 및 컴포넌트 제작, 프로젝트 홍보 영상 제작, PPT 제작 지원</td>
+    <td>사용자/기사 앱 UI 개발, 기능 일부 구현, 홍보 영상 제작</td>
   </tr>
   <tr>
     <td><b>최준영</b></td>
     <td>팀원</td>
-    <td>사용자 앱 기능, 메인화면 기능, 버스 데이터 Open API 연동, NAVER MAPS API 연동, 메인 기능 로직</td>
+    <td>사용자 앱 기능 개발, 메인 로직, 버스 데이터 API·Naver Maps 연동</td>
   </tr>
   <tr>
     <td><b>원동건</b></td>
     <td>팀원</td>
-    <td>기사 앱 기능, 관리자 대시보드 개발, 로그인·JWT·권한 처리, 문의/즐겨찾기/예약 기능, AWS 배포</td>
+    <td>기사 앱 기능, 관리자 웹 개발, 로그인/JWT·권한 처리, 예약·문의·즐겨찾기 API, AWS 배포</td>
   </tr>
 </table>
+
 
 
 ---
