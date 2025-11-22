@@ -149,8 +149,8 @@ AWS EC2 · RDS · Route53 · Docker · Docker Compose · Nginx · Certbot · Git
 
 | 구분 | 도메인 / 경로 | 연결 대상 | 설명 |
 |------|----------------|------------|------|
-| 사용자 프론트엔드 | GitHub Release | HopOn_UserApp | 사용자 앱 |
-| 기사 프론트엔드 | GitHub Release | HopOn_DriverApp | 기사 앱 |
+| 사용자 프론트엔드 | [HopOn_UserApp](https://github.com/TeamProject-Seoil/HopOn_UserAPP/releases/tag/v1.0.0) | HopOn_UserApp | 사용자 앱 |
+| 기사 프론트엔드 | [HopOn_DriverApp](https://github.com/TeamProject-Seoil/HopOn_DriverApp/releases/tag/v1.0.0) | HopOn_DriverApp | 기사 앱 |
 | 관리자 프론트엔드 | https://www.hoponhub.store | HopOn_ADMIN_Page | 관리자 웹 페이지 |
 | 사용자·기사 백엔드 | `/api`, `/auth`, `/users` | HopOn Backend | 예약/운행/문의/즐겨찾기 API |
 | 관리자 백엔드 | `/admin`, `/auth`, `/users`, `/reservations`, `/actuator/health` | HopOn_ADMIN Backend | 관리자 전용 API |
